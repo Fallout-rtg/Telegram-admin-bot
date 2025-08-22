@@ -1,0 +1,157 @@
+import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.types import Message
+import asyncio
+import json
+import os
+
+# ⚠️ ЗАМЕНИТЕ эти значения на свои
+TOKEN = "8362532466:AAFpsNARRckyGDHWgy1ztKJRCBlKeWzFxcs"  # Получите у @BotFather
+ADMIN_ID = 2032240231          # Ваш Telegram ID
+MODERATORS = []                # ID модераторов
+LOG_CHAT_ID = None             # ID чата для логов (опционально)
+
+# ⚡ Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+
+# Создаем бота и диспетчер
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+
+# Файл для сохранения статистики
+STATS_FILE = "stats.json"
+
+# Загрузка статистики
+def load_stats():
+    if os.path.exists(STATS_FILE):
+        try:
+            with open(STATS_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return {"warns": 0, "mutes": 0, "bans": 0}
+    return {"warns": 0, "mutes": 0, "bans": 0}
+
+# Сохранение статистики
+def save_stats():
+    with open(STATS_FILE, 'w') as f:
+        json.dump(stats, f)
+
+# Загружаем статистику
+stats = load_stats()
+
+# Проверка прав
+def is_admin(user_id: int) -> bool:
+    return user_id == ADMIN_ID
+
+def is_moderator(user_id: int) -> bool:
+    return user_id in MODERATORS or is_admin(user_id)
+
+# Логирование
+async def log_action(action: str, username: str, chat: str):
+    if LOG_CHAT_ID:
+        try:
+            await bot.send_message(
+                LOG_CHAT_ID,
+                f"📝 ДЕЙСТВИЕ: {action}\n👤 Пользователь: {username}\n💬 Чат: {chat}"
+            )
+        except Exception as e:
+            logging.error(f"Ошибка отправки лога: {e}")
+
+# Старт
+@dp.message(Command("start"))
+async def cmd_start(message: Message):
+    await message.answer("✅ Бот работает. Ты можешь использовать команды /warn, /mute, /ban, /stats.")
+
+# Варн
+@dp.message(Command("warn"))
+async def cmd_warn(message: Message):
+    if not is_moderator(message.from_user.id):
+        await message.answer("❌ У тебя нет прав для этой команды.")
+        return
+    if not message.reply_to_message:
+        await message.answer("❌ Используй команду в ответ на сообщение.")
+        return
+
+    user = message.reply_to_message.from_user
+    username = user.username or user.first_name
+    stats["warns"] += 1
+    save_stats()
+    await message.answer(f"⚠️ Пользователь @{username} получил предупреждение.")
+    await log_action("WARN", username, message.chat.title or "ЛС")
+
+# Мут
+@dp.message(Command("mute"))
+async def cmd_mute(message: Message):
+    if not is_moderator(message.from_user.id):
+        await message.answer("❌ У тебя нет прав для этой команды.")
+        return
+    if not message.reply_to_message:
+        await message.answer("❌ Используй команду в ответ на сообщение.")
+        return
+
+    user = message.reply_to_message.from_user
+    username = user.username or user.first_name
+    chat_title = message.chat.title or "ЛС"
+
+    try:
+        await bot.restrict_chat_member(
+            message.chat.id,
+            user.id,
+            permissions=types.ChatPermissions(can_send_messages=False)
+        )
+        stats["mutes"] += 1
+        save_stats()
+        await message.answer(f"🔇 Пользователь @{username} замучен.")
+        await log_action("MUTE", username, chat_title)
+    except Exception as e:
+        logging.error(f"Ошибка при муте: {e}")
+        await message.answer("❌ Не удалось замутить пользователя. Проверьте права бота.")
+
+# Бан
+@dp.message(Command("ban"))
+async def cmd_ban(message: Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("❌ Только главный админ может банить напрямую.")
+        return
+    if not message.reply_to_message:
+        await message.answer("❌ Используй команду в ответ на сообщение.")
+        return
+
+    user = message.reply_to_message.from_user
+    username = user.username or user.first_name
+    chat_title = message.chat.title or "ЛС"
+
+    try:
+        await bot.ban_chat_member(message.chat.id, user.id)
+        stats["bans"] += 1
+        save_stats()
+        await message.answer(f"🚫 Пользователь @{username} забанен.")
+        await log_action("BAN", username, chat_title)
+    except Exception as e:
+        logging.error(f"Ошибка при бане: {e}")
+        await message.answer("❌ Не удалось забанить пользователя. Проверьте права бота.")
+
+# Статистика
+@dp.message(Command("stats"))
+async def cmd_stats(message: Message):
+    if not is_moderator(message.from_user.id):
+        await message.answer("❌ У тебя нет прав для этой команды.")
+        return
+
+    await message.answer(
+        f"📊 Статистика:\n"
+        f"⚠️ Warns: {stats['warns']}\n"
+        f"🔇 Mutes: {stats['mutes']}\n"
+        f"🚫 Bans: {stats['bans']}"
+    )
+
+# Запуск
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
